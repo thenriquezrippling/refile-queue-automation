@@ -7,25 +7,26 @@ Runs daily at 6am PST (or on demand) to:
   2. Apply 3-case decision tree (create/link/label Re-File tickets)
   3. Record Date Added to Re-File Queue on DNF tickets
   4. Monitor FILED Re-File tickets -> update linked DNF Completion Date
-  5. Log all activity to Google Sheets (Daily Log + Run Summary tabs)
+  5. Email a run summary to NOTIFY_EMAIL
 """
 
 import os
 import json
 import logging
+import smtplib
+from email.mime.text import MIMEText
 from datetime import date, datetime
 from typing import Optional
 import requests
 from requests.auth import HTTPBasicAuth
-import gspread
-from google.oauth2.service_account import Credentials
 
 # Configuration
-JIRA_BASE_URL     = os.environ["JIRA_BASE_URL"]
-JIRA_EMAIL        = os.environ["JIRA_EMAIL"]
-JIRA_API_TOKEN    = ********["JIRA_API_TOKEN"]
-GOOGLE_SHEET_ID   = os.environ["GOOGLE_SHEET_ID"]
-GOOGLE_CREDS_JSON = os.environ["GOOGLE_CREDENTIALS_JSON"]
+JIRA_BASE_URL  = os.environ["JIRA_BASE_URL"]
+JIRA_EMAIL     = os.environ["JIRA_EMAIL"]
+JIRA_API_TOKEN = ********["JIRA_API_TOKEN"]
+SMTP_USER      = os.environ["SMTP_USER"]       # Gmail address used to send
+SMTP_PASSWORD  = ********"SMTP_PASSWORD"]   # Gmail app password
+NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "thenriquez@rippling.com")
 
 JIRA_PROJECT = "REFILE"
 REFILE_TYPE  = "Re-File"
@@ -272,7 +273,6 @@ def process_dnf_tickets(jira):
 
 
 def process_filed_tickets(jira):
-    """For every FILED Re-File ticket, stamp Completion Date + label on linked DNF tickets."""
     jql = f'project = {JIRA_PROJECT} AND issuetype = "{REFILE_TYPE}" AND status = "{STATUS_FILED}"'
     filed = jira.search_all(jql, ["summary", "status", "issuelinks", "resolutiondate"])
     log.info(f"Found {len(filed)} FILED Re-File tickets to check")
@@ -305,57 +305,52 @@ def process_filed_tickets(jira):
     return results
 
 
-def log_to_sheets(dnf_results, filed_results):
-    creds = Credentials.from_service_account_info(
-        json.loads(GOOGLE_CREDS_JSON),
-        scopes=["https://www.googleapis.com/auth/spreadsheets",
-                "https://www.googleapis.com/auth/drive"],
-    )
-    gc = gspread.authorize(creds)
-    sh = gc.open_by_key(GOOGLE_SHEET_ID)
+def send_email(dnf_results, filed_results):
     now = datetime.now().strftime("%Y-%m-%d %H:%M PST")
+    a = sum(1 for r in dnf_results if r.get("case") == "A")
+    b = sum(1 for r in dnf_results if r.get("case") == "B")
+    c = sum(1 for r in dnf_results if r.get("case") == "C")
+    e = sum(1 for r in dnf_results + filed_results if r["status"] == "error")
 
-    def jira_url(key):
-        return f"https://rippling.atlassian.net/browse/{key}" if key else ""
+    lines = [
+        f"Re-File Queue Run Complete — {now}",
+        "",
+        f"DNF Tickets Processed: {len(dnf_results)}",
+        f"  Case A — New Re-File created:       {a}",
+        f"  Case B — Linked to open Re-File:    {b}",
+        f"  Case C — Linked to resolved Re-File: {c}",
+        "",
+        f"FILED Re-Files processed: {len(filed_results)}",
+        f"Errors: {e}",
+    ]
 
-    try:
-        log_ws = sh.worksheet("Daily Log")
-    except gspread.WorksheetNotFound:
-        log_ws = sh.add_worksheet("Daily Log", rows=5000, cols=6)
-        log_ws.append_row(["Run Date", "DNF Ticket", "Case", "Action Taken",
-                           "Re-File Ticket", "Status"])
+    # List any errors in detail
+    errors = [r for r in dnf_results + filed_results if r["status"] == "error"]
+    if errors:
+        lines += ["", "--- Errors ---"]
+        for r in errors:
+            lines.append(f"  {r['ticket']}: {r['action']}")
 
-    for r in dnf_results + [
-        {"ticket": r["ticket"], "case": "FILED", "refile": r["refile"],
-         "action": r["action"], "status": r["status"]} for r in filed_results
-    ]:
-        log_ws.append_row([
-            now,
-            jira_url(r["ticket"]),
-            r.get("case", "?"),
-            r["action"],
-            jira_url(r.get("refile", "")),
-            r["status"],
-        ])
+    # List newly created Re-File tickets
+    created = [r for r in dnf_results if r.get("case") == "A"]
+    if created:
+        lines += ["", "--- New Re-File Tickets Created ---"]
+        for r in created:
+            lines.append(f"  {r['ticket']} -> https://rippling.atlassian.net/browse/{r['refile']}")
 
-    try:
-        sum_ws = sh.worksheet("Run Summary")
-    except gspread.WorksheetNotFound:
-        sum_ws = sh.add_worksheet("Run Summary", rows=500, cols=7)
-        sum_ws.append_row(["Run Date", "Total Processed", "New Re-Files Created",
-                           "Linked (Open)", "Linked (Completed)", "Filed & Closed", "Errors"])
+    body = "\n".join(lines)
+    subject = f"Re-File Queue — {now} | A:{a} B:{b} C:{c} Filed:{len(filed_results)} Errors:{e}"
 
-    all_results = dnf_results + filed_results
-    sum_ws.append_row([
-        now,
-        len(all_results),
-        sum(1 for r in dnf_results if r.get("case") == "A"),
-        sum(1 for r in dnf_results if r.get("case") == "B"),
-        sum(1 for r in dnf_results if r.get("case") == "C"),
-        len(filed_results),
-        sum(1 for r in all_results if r["status"] == "error"),
-    ])
-    log.info("Google Sheet updated.")
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_USER
+    msg["To"]      = NOTIFY_EMAIL
+
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        server.login(SMTP_USER, SMTP_PASSWORD)
+        server.send_message(msg)
+
+    log.info(f"Summary email sent to {NOTIFY_EMAIL}")
 
 
 def main():
@@ -363,7 +358,7 @@ def main():
     jira = JiraClient()
     dnf_results   = process_dnf_tickets(jira)
     filed_results = process_filed_tickets(jira)
-    log_to_sheets(dnf_results, filed_results)
+    send_email(dnf_results, filed_results)
     a = sum(1 for r in dnf_results if r.get("case") == "A")
     b = sum(1 for r in dnf_results if r.get("case") == "B")
     c = sum(1 for r in dnf_results if r.get("case") == "C")
