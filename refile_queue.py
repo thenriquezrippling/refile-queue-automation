@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-refile_queue.py — TaxOps Re-File Queue Automation
+refile_queue.py - TaxOps Re-File Queue Automation
 
 Runs daily at 6am PST (or on demand) to:
   1. Find unprocessed DNF tickets in filter 47966
@@ -20,6 +20,7 @@ from requests.auth import HTTPBasicAuth
 import gspread
 from google.oauth2.service_account import Credentials
 
+# Configuration
 JIRA_BASE_URL     = os.environ["JIRA_BASE_URL"]
 JIRA_EMAIL        = os.environ["JIRA_EMAIL"]
 JIRA_API_TOKEN    = ********["JIRA_API_TOKEN"]
@@ -30,6 +31,7 @@ JIRA_PROJECT = "REFILE"
 REFILE_TYPE  = "Re-File"
 FILTER_ID    = "47966"
 
+# Custom field IDs
 FIELD_CLIENT_ID         = "customfield_18946"
 FIELD_AGENCY            = "customfield_18931"
 FIELD_YEAR              = "customfield_18932"
@@ -42,8 +44,8 @@ FIELD_FREQUENCY         = "customfield_18943"
 FIELD_REJECTION_REASON  = "customfield_21367"
 FIELD_STATE             = "customfield_21334"
 FIELD_FILING_PERIOD_CMB = "customfield_20922"
-FIELD_DATE_ADDED        = "customfield_19002"  # Date Added to Re-File Queue
-FIELD_COMPLETION_DATE   = "customfield_18941"  # Completion Date
+FIELD_DATE_ADDED        = "customfield_19002"
+FIELD_COMPLETION_DATE   = "customfield_18941"
 
 LABEL_CREATED   = "refile-ticket-created"
 LABEL_COMPLETED = "refile-completed"
@@ -104,15 +106,17 @@ class JiraClient:
     def add_link(self, key_a, key_b, link_type="Relates"):
         self._post("/issueLink", {
             "type": {"name": link_type},
-            "inwardIssue": {"key": key_a},
+            "inwardIssue":  {"key": key_a},
             "outwardIssue": {"key": key_b},
         })
 
     def add_comment(self, key, text):
         self._post(f"/issue/{key}/comment", {
-            "body": {"type": "doc", "version": 1,
-                     "content": [{"type": "paragraph",
-                                  "content": [{"type": "text", "text": text}]}]}
+            "body": {
+                "type": "doc", "version": 1,
+                "content": [{"type": "paragraph",
+                              "content": [{"type": "text", "text": text}]}],
+            }
         })
 
     @staticmethod
@@ -125,8 +129,10 @@ class JiraClient:
 
     @staticmethod
     def is_done(issue):
-        return (issue.get("fields", {}).get("status", {})
-                     .get("statusCategory", {}).get("key") == "done")
+        return (issue.get("fields", {})
+                     .get("status", {})
+                     .get("statusCategory", {})
+                     .get("key") == "done")
 
 
 def _copy_value(val):
@@ -181,7 +187,8 @@ def _str(val):
 
 
 def process_dnf_tickets(jira):
-    jql = f'filter={FILTER_ID} AND labels not in ("{LABEL_CREATED}", "{LABEL_COMPLETED}")'
+    jql = (f'filter={FILTER_ID} AND '
+           f'labels not in ("{LABEL_CREATED}", "{LABEL_COMPLETED}")')
     tickets = jira.search_all(jql, [
         "summary", "labels", "status", "issuelinks",
         FIELD_CLIENT_ID, FIELD_AGENCY, FIELD_YEAR, FIELD_PERIOD,
@@ -191,7 +198,7 @@ def process_dnf_tickets(jira):
 
     for ticket in tickets:
         key = ticket["key"]
-        f = ticket["fields"]
+        f   = ticket["fields"]
         client_id = f.get(FIELD_CLIENT_ID) or ""
         agency    = f.get(FIELD_AGENCY) or ""
         year      = f.get(FIELD_YEAR) or ""
@@ -202,9 +209,9 @@ def process_dnf_tickets(jira):
             existing = find_existing_refile(jira, client_id, agency, year, period)
 
             if existing is None:
-                # Case A: No Re-File exists -> create one
+                # Case A: no Re-File exists -> create one
                 full = jira.get_issue(key)
-                ff = full["fields"]
+                ff   = full["fields"]
                 new_fields = {
                     "project":     {"key": JIRA_PROJECT},
                     "issuetype":   {"name": REFILE_TYPE},
@@ -273,8 +280,8 @@ def process_filed_tickets(jira):
 
     for refile in filed:
         refile_key = refile["key"]
-        raw_date  = refile["fields"].get("resolutiondate") or ""
-        comp_date = raw_date[:10] if raw_date else date.today().isoformat()
+        raw_date   = refile["fields"].get("resolutiondate") or ""
+        comp_date  = raw_date[:10] if raw_date else date.today().isoformat()
 
         for lnk in refile["fields"].get("issuelinks", []):
             linked = lnk.get("inwardIssue") or lnk.get("outwardIssue")
@@ -316,12 +323,20 @@ def log_to_sheets(dnf_results, filed_results):
     except gspread.WorksheetNotFound:
         log_ws = sh.add_worksheet("Daily Log", rows=5000, cols=6)
         log_ws.append_row(["Run Date", "DNF Ticket", "Case", "Action Taken",
-                            "Re-File Ticket", "Status"])
+                           "Re-File Ticket", "Status"])
 
-    for r in dnf_results + [{"ticket": r["ticket"], "case": "FILED", "refile": r["refile"],
-                              "action": r["action"], "status": r["status"]} for r in filed_results]:
-        log_ws.append_row([now, jira_url(r["ticket"]), r.get("case", "?"),
-                           r["action"], jira_url(r.get("refile", "")), r["status"]])
+    for r in dnf_results + [
+        {"ticket": r["ticket"], "case": "FILED", "refile": r["refile"],
+         "action": r["action"], "status": r["status"]} for r in filed_results
+    ]:
+        log_ws.append_row([
+            now,
+            jira_url(r["ticket"]),
+            r.get("case", "?"),
+            r["action"],
+            jira_url(r.get("refile", "")),
+            r["status"],
+        ])
 
     try:
         sum_ws = sh.worksheet("Run Summary")
@@ -332,7 +347,8 @@ def log_to_sheets(dnf_results, filed_results):
 
     all_results = dnf_results + filed_results
     sum_ws.append_row([
-        now, len(all_results),
+        now,
+        len(all_results),
         sum(1 for r in dnf_results if r.get("case") == "A"),
         sum(1 for r in dnf_results if r.get("case") == "B"),
         sum(1 for r in dnf_results if r.get("case") == "C"),
@@ -359,6 +375,7 @@ def main():
     log.info(f"  Linked (completed)   : {c}")
     log.info(f"  Filed & closed       : {len(filed_results)}")
     log.info(f"  Errors               : {e}")
+    log.info("=== End ===")
 
 
 if __name__ == "__main__":
