@@ -86,14 +86,18 @@ class JiraClient:
         r.raise_for_status()
 
     def search_all(self, jql, fields, batch=50):
-        issues, start = [], 0
+        """Page through all results using the /search/jql cursor-based endpoint."""
+        issues = []
+        next_page_token = None
         while True:
-            resp = self._post("/search", {"jql": jql, "fields": fields,
-                                          "startAt": start, "maxResults": batch})
+            body = {"jql": jql, "fields": fields, "maxResults": batch}
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
+            resp = self._post("/search/jql", body)
             chunk = resp.get("issues", [])
             issues.extend(chunk)
-            start += len(chunk)
-            if start >= resp.get("total", 0) or not chunk:
+            next_page_token = resp.get("nextPageToken")
+            if not chunk or not next_page_token:
                 break
         return issues
 
