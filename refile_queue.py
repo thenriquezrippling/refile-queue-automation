@@ -20,13 +20,15 @@ from typing import Optional
 import requests
 from requests.auth import HTTPBasicAuth
 
+_env = os.environ.get
+
 # Configuration
-JIRA_BASE_URL  = os.environ["JIRA_BASE_URL"]
-JIRA_EMAIL     = os.environ["JIRA_EMAIL"]
-JIRA_API_TOKEN = ********["JIRA_API_TOKEN"]
-SMTP_USER      = os.environ["SMTP_USER"]       # Gmail address used to send
-SMTP_PASSWORD  = ********"SMTP_PASSWORD"]   # Gmail app password
-NOTIFY_EMAIL   = os.environ.get("NOTIFY_EMAIL", "thenriquez@rippling.com")
+JIRA_BASE_URL  = _env("JIRA_BASE_URL", "https://rippling.atlassian.net")
+JIRA_EMAIL     = _env("JIRA_EMAIL", "")
+JIRA_API_TOKEN = _env("JIRA_API_TOKEN", "")
+SMTP_USER      = _env("SMTP_USER", "")
+SMTP_PASSWORD  = _env("SMTP_PASSWORD", "")
+NOTIFY_EMAIL   = _env("NOTIFY_EMAIL", "thenriquez@rippling.com")
 
 JIRA_PROJECT = "REFILE"
 REFILE_TYPE  = "Re-File"
@@ -313,25 +315,23 @@ def send_email(dnf_results, filed_results):
     e = sum(1 for r in dnf_results + filed_results if r["status"] == "error")
 
     lines = [
-        f"Re-File Queue Run Complete — {now}",
+        f"Re-File Queue Run Complete - {now}",
         "",
         f"DNF Tickets Processed: {len(dnf_results)}",
-        f"  Case A — New Re-File created:       {a}",
-        f"  Case B — Linked to open Re-File:    {b}",
-        f"  Case C — Linked to resolved Re-File: {c}",
+        f"  Case A - New Re-File created:        {a}",
+        f"  Case B - Linked to open Re-File:     {b}",
+        f"  Case C - Linked to resolved Re-File: {c}",
         "",
         f"FILED Re-Files processed: {len(filed_results)}",
         f"Errors: {e}",
     ]
 
-    # List any errors in detail
     errors = [r for r in dnf_results + filed_results if r["status"] == "error"]
     if errors:
         lines += ["", "--- Errors ---"]
         for r in errors:
             lines.append(f"  {r['ticket']}: {r['action']}")
 
-    # List newly created Re-File tickets
     created = [r for r in dnf_results if r.get("case") == "A"]
     if created:
         lines += ["", "--- New Re-File Tickets Created ---"]
@@ -339,7 +339,7 @@ def send_email(dnf_results, filed_results):
             lines.append(f"  {r['ticket']} -> https://rippling.atlassian.net/browse/{r['refile']}")
 
     body = "\n".join(lines)
-    subject = f"Re-File Queue — {now} | A:{a} B:{b} C:{c} Filed:{len(filed_results)} Errors:{e}"
+    subject = f"Re-File Queue - {now} | A:{a} B:{b} C:{c} Filed:{len(filed_results)} Errors:{e}"
 
     msg = MIMEText(body)
     msg["Subject"] = subject
