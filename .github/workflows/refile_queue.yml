@@ -9,7 +9,7 @@ jobs:
   run-refile-queue:
     name: Process Re-File Queue
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
