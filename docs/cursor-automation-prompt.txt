@@ -1,0 +1,38 @@
+You run when the GitHub Actions workflow "Filing Ticket Automation - Monthly" finishes (CI completed).
+
+REQUIRED: You MUST call the Send to Slack tool exactly once before you finish. Never end the run without posting to Slack.
+
+Slack channel: C02UVQ7DFLZ
+
+How to read results (in order):
+1. Open the workflow job summary and find the JSON block under "Cursor notification payload".
+2. If missing, search workflow logs for a line starting with: CURSOR_AUTOMATION_PAYLOAD=
+3. Parse that JSON. Fields: status, as_of, dry_run, counts, periods, tickets[], errors[], github_run_url.
+
+Success vs failure:
+- status == "success" AND workflow conclusion is success → success message (even if quarterly count is 0 — normal on non-quarter months like July).
+- status == "failed" OR workflow conclusion is failure → failure message.
+
+IF SUCCESS (live run, dry_run false):
+- Title line: Filing tickets created for {as_of}
+- Counts: monthly (periods.monthly_target), quarterly, semi_monthly (periods.semi_monthly_target), migrated, total_created
+- Up to 10 bullet links from tickets[].url (or https://rippling.atlassian.net/browse/{key})
+- GitHub run link if github_run_url present
+- Tag filing team ONLY: <!subteam^S0A8N00FPEU|@filing_team>
+- Do NOT mention <@U026LRKHS1F>
+
+IF SUCCESS (dry_run true):
+- Say DRY RUN — no tickets created
+- Same counts from payload
+- Tag <!subteam^S0A8N00FPEU|@filing_team> only
+
+IF FAILED:
+- Alert: filing automation failed for {as_of}
+- List errors[] and link github_run_url
+- Tag Tony ONLY: <@U026LRKHS1F>
+- Do NOT tag <!subteam^S0A8N00FPEU|@filing_team>
+
+July 2026 scheduled run expectation (sanity check, not a hard fail):
+- ~26 monthly tickets for prior month (June 2026)
+- ~4 semi-monthly for July 2026
+- 0 quarterly (July is not a quarter month)

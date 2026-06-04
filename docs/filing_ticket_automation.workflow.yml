@@ -1,0 +1,72 @@
+# Copy to .github/workflows/filing_ticket_automation.yml (GitHub API cannot update workflows in this repo).
+name: Filing Ticket Automation - Monthly
+
+on:
+  schedule:
+    - cron: "0 8 1 * *"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: "Run as-of date (YYYY-MM-DD)"
+        required: false
+        type: string
+      only:
+        default: all
+        type: choice
+        options: [all, monthly, quarterly, semi-monthly]
+      exclude_states:
+        required: false
+        type: string
+      dry_run:
+        type: boolean
+        default: false
+
+concurrency:
+  group: filing-ticket-automation
+  cancel-in-progress: false
+
+jobs:
+  create-filing-tickets:
+    name: Create Filing Tickets
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Run Filing Ticket Automation
+        id: automation
+        env:
+          JIRA_BASE_URL: https://rippling.atlassian.net
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          FILING_AUTOMATION_RESULT_PATH: filing-automation-result.json
+        run: |
+          ARGS=()
+          if [ -n "${{ inputs.as_of }}" ]; then ARGS+=(--as-of "${{ inputs.as_of }}"); fi
+          if [ -n "${{ inputs.only }}" ] && [ "${{ inputs.only }}" != "all" ]; then ARGS+=(--only "${{ inputs.only }}"); fi
+          if [ -n "${{ inputs.exclude_states }}" ]; then ARGS+=(--exclude-states "${{ inputs.exclude_states }}"); fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS+=(--dry-run); fi
+          python filing_ticket_automation.py "${ARGS[@]}"
+      - name: Publish result for Cursor Automation
+        if: always()
+        run: |
+          if [ -f filing-automation-result.json ]; then
+            echo "Posted filing-automation-result.json to job summary and logs."
+            echo "## Cursor notification payload (machine-readable)" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat filing-automation-result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "CURSOR_AUTOMATION_PAYLOAD=$(python -c 'import json; print(json.dumps(json.load(open(\"filing-automation-result.json\"))), separators=(\",\", \":\"))')"
+          else
+            echo "No filing-automation-result.json (workflow may have failed before summary)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload automation result artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: filing-automation-result
+          path: filing-automation-result.json
+          if-no-files-found: ignore

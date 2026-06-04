@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """TaxOps filing ticket automation — see docs/cursor-automation-filing-tickets.md"""
 import argparse
+import json
 import os
 import re
 import sys
@@ -31,6 +32,7 @@ FIELD_SEMIM_TYPE = "customfield_21650"
 COPY_FIELDS = [FIELD_FILING_UNIT, FIELD_STATE_CODE, FIELD_TAX_TYPES, FIELD_REVIEWER, FIELD_PAYMENT, FIELD_FILING_MTH, FIELD_TEMPLATE, FIELD_NOTES, FIELD_APPROVAL, FIELD_SEMIM_TYPE, "customfield_21477", "customfield_21473", "customfield_21474", "customfield_21475", "customfield_21478"]
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 STATE_ALIASES = {"COLORADO": "CO", "OHIO": "OH"}
+RESULT_PATH = _env("FILING_AUTOMATION_RESULT_PATH", "filing-automation-result.json")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -210,7 +212,6 @@ def replace_quarter_label(labels, new_label):
 def period_already_exists(jira, parent_key, issue_type, marker):
     return bool(jira.search_jql(f'project = {JIRA_PROJECT} AND parent = {parent_key} AND issuetype = "{issue_type}" AND summary ~ "\\"{marker}\\""', ["key"], max_results=1))
 
-# Run month -> (target period name, label, source quarter, source year offset from run year)
 QUARTER_RUN = {
     3: ("Q1", lambda y: f"q1{str(y)[2:]}-filings", "Q4", -1),
     6: ("Q2", lambda y: f"q2{str(y)[2:]}-filings", "Q1", 0),
@@ -314,9 +315,47 @@ def create_semi_monthly_tickets(jira, today, *, dry_run=False, exclude_states=No
                 errors and errors.append({"type": "semi-monthly", "parent": parent_key, "error": str(e)})
     return created
 
-def write_run_summary(monthly, quarterly, semi_monthly, migrated, today, errors):
+def build_run_payload(monthly, quarterly, semi_monthly, migrated, today, errors, *, dry_run=False):
+    prior = advance_month(today, -1)
+    prior_str = f"{MONTHS[prior.month - 1]} {prior.year}"
+    month_name = MONTHS[today.month - 1]
+    run_url = os.environ.get("GITHUB_SERVER_URL") and os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID")
+    if run_url:
+        run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+    tickets = []
+    for t in monthly + quarterly + semi_monthly:
+        key = t.get("key")
+        if key and key != "DRY-RUN":
+            tickets.append({"key": key, "summary": t.get("summary", ""), "url": f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}"})
+    return {
+        "status": "failed" if errors else "success",
+        "as_of": today.isoformat(),
+        "dry_run": dry_run,
+        "workflow_name": "Filing Ticket Automation - Monthly",
+        "github_run_url": run_url or None,
+        "counts": {
+            "monthly": len(monthly),
+            "quarterly": len(quarterly),
+            "semi_monthly": len(semi_monthly),
+            "migrated": len(migrated),
+            "total_created": len(monthly) + len(quarterly) + len(semi_monthly),
+        },
+        "periods": {
+            "monthly_target": prior_str,
+            "semi_monthly_target": f"{month_name} {today.year}",
+        },
+        "tickets": tickets[:25],
+        "errors": errors[:20],
+    }
+
+def write_run_summary(monthly, quarterly, semi_monthly, migrated, today, errors, *, dry_run=False):
     prior = advance_month(today, -1); prior_str = f"{MONTHS[prior.month - 1]} {prior.year}"
-    lines = [f"## Filing Ticket Automation — {today.isoformat()}", "", f"**Status:** {'failed' if errors else 'success'}"]
+    payload = build_run_payload(monthly, quarterly, semi_monthly, migrated, today, errors, dry_run=dry_run)
+    lines = [f"## Filing Ticket Automation — {today.isoformat()}", ""]
+    if dry_run:
+        lines.append("**Mode:** dry-run (no Jira writes)")
+        lines.append("")
+    lines.append(f"**Status:** {payload['status']}")
     if migrated:
         lines.append(f"\n### Semi-Monthly reparented: {len(migrated)}")
         for t in migrated[:20]:
@@ -330,13 +369,29 @@ def write_run_summary(monthly, quarterly, semi_monthly, migrated, today, errors)
     if semi_monthly:
         lines.append(f"\n### Semi-Monthly created: {len(semi_monthly)}")
         for t in semi_monthly: lines.append(f"- {t['key']}: {t['summary']}")
-    lines.append(f"\n**Total created:** {len(monthly)+len(quarterly)+len(semi_monthly)}")
+    lines.append(f"\n**Total created:** {payload['counts']['total_created']}")
     if errors:
         lines.append("\n### Errors")
         for err in errors[:20]: lines.append(f"- {err}")
-    summary = "\n".join(lines); log.info("\n%s", summary)
+    lines.append("\n### Cursor notification payload")
+    lines.append("```json")
+    lines.append(json.dumps(payload, indent=2))
+    lines.append("```")
+    summary = "\n".join(lines)
+    log.info("\n%s", summary)
+    compact = json.dumps(payload, separators=(",", ":"))
+    log.info("CURSOR_AUTOMATION_PAYLOAD=%s", compact)
+    print(f"CURSOR_AUTOMATION_PAYLOAD={compact}", flush=True)
+    try:
+        with open(RESULT_PATH, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+            fh.write("\n")
+    except OSError as exc:
+        log.warning("Could not write %s: %s", RESULT_PATH, exc)
     path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if path: open(path, "a", encoding="utf-8").write(summary + "\n")
+    if path:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(summary + "\n")
 
 def parse_args():
     p = argparse.ArgumentParser(description="TaxOps filing ticket automation")
@@ -349,22 +404,33 @@ def parse_args():
     return p.parse_args()
 
 def main():
-    args = parse_args(); today = args.as_of or date.today(); errors = []
-    jira = JiraClient()
-    opts = dict(dry_run=args.dry_run, exclude_states=parse_exclude_states(args.exclude_states), skip_existing=not args.no_skip_existing, errors=errors)
-    migrated = []
-    run_semim = args.only in ("semi-monthly", "all")
-    if run_semim and not args.no_migrate_semi_monthly:
-        migrated = migrate_semi_monthly_to_epics(
-            jira,
-            dry_run=opts["dry_run"],
-            exclude_states=opts["exclude_states"],
-            errors=opts["errors"],
-        )
-    monthly = create_monthly_tickets(jira, today, **opts) if args.only in ("monthly", "all") else []
-    quarterly = create_quarterly_tickets(jira, today, **opts) if args.only in ("quarterly", "all") else []
-    semi = create_semi_monthly_tickets(jira, today, **opts) if run_semim else []
-    write_run_summary(monthly, quarterly, semi, migrated, today, errors)
-    if errors and not args.dry_run: sys.exit(1)
+    args = parse_args()
+    today = args.as_of or date.today()
+    errors = []
+    monthly, quarterly, semi, migrated = [], [], [], []
+    dry_run = args.dry_run
+    try:
+        jira = JiraClient()
+        opts = dict(dry_run=dry_run, exclude_states=parse_exclude_states(args.exclude_states), skip_existing=not args.no_skip_existing, errors=errors)
+        run_semim = args.only in ("semi-monthly", "all")
+        if run_semim and not args.no_migrate_semi_monthly:
+            migrated = migrate_semi_monthly_to_epics(
+                jira,
+                dry_run=opts["dry_run"],
+                exclude_states=opts["exclude_states"],
+                errors=opts["errors"],
+            )
+        monthly = create_monthly_tickets(jira, today, **opts) if args.only in ("monthly", "all") else []
+        quarterly = create_quarterly_tickets(jira, today, **opts) if args.only in ("quarterly", "all") else []
+        semi = create_semi_monthly_tickets(jira, today, **opts) if run_semim else []
+        write_run_summary(monthly, quarterly, semi, migrated, today, errors, dry_run=dry_run)
+        if errors and not dry_run:
+            sys.exit(1)
+    except Exception as exc:
+        log.exception("Filing ticket automation crashed: %s", exc)
+        errors.append({"type": "fatal", "error": str(exc)})
+        write_run_summary(monthly, quarterly, semi, migrated, today, errors, dry_run=dry_run)
+        sys.exit(1)
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
