@@ -43,6 +43,20 @@ IF FAILED:
 
 The workflow must live at **`.github/workflows/filing_ticket_automation.yml`**. If yours is still under `.github/workflows/.github/workflows/`, move it to the correct path in the repo root.
 
+## Quarterly ticket rules
+
+On quarter-boundary months (Mar/Jun/Sep/Dec), new **Quarterly** tickets are created only when:
+
+1. The parent epic has label `quarterly-filings-epic`.
+2. An existing **Quarterly** child summary contains the **source** period (e.g. `Q1 2026` when creating `Q2 2026` in June).
+3. The newest such ticket per filing unit is the template (not the newest Quarterly child overall).
+4. Summaries without `Q{n} YYYY` are ignored (ACA-only, error tickets, etc.).
+5. Creation is skipped if the new summary would not contain the target period.
+
+## Semi-monthly epic migration
+
+When running `only=semi-monthly` or `all`, the script **first** reparents Semi-Monthly tickets under monthly/quarterly parents to the semi-monthly Parent Epic for that state (by state code). Example: Kentucky children under `FILING-2706` → `FILING-6212`. Use `--no-migrate-semi-monthly` to skip. Honors `--dry-run`.
+
 ## Backfill May 2026 + Q2 2026
 
 Actions → **Filing Ticket Automation - Monthly** → **Run workflow**:
@@ -51,5 +65,17 @@ Actions → **Filing Ticket Automation - Monthly** → **Run workflow**:
 |------|--------|------|----------------|---------|
 | 1 | 2026-06-01 | monthly | CO,OH | true |
 | 2 | 2026-06-01 | quarterly | CO,OH | true |
-| 3 | 2026-06-01 | monthly | CO,OH | false |
-| 4 | 2026-06-01 | quarterly | CO,OH | false |
+| 3 | 2026-06-01 | semi-monthly | CO,OH | true |
+| 4 | 2026-06-01 | monthly | CO,OH | false |
+| 5 | 2026-06-01 | quarterly | CO,OH | false |
+| 6 | 2026-06-01 | semi-monthly | CO,OH | false |
+
+After merging this fix, quarterly live runs should create far fewer tickets (only units with `Q1 2026` templates). `skip-existing` still applies for summaries already containing `Q2 2026`.
+
+### Cleanup incorrect quarterly creates (Jun 2026)
+
+Review/cancel tickets without `Q2 2026` in summary:
+
+`project = FILING AND created >= "2026-06-03" AND issuetype = Quarterly AND summary !~ "Q2 2026"`
+
+Examples: `FILING-6291`, `FILING-6281`, `FILING-6308`, `FILING-6315`.
