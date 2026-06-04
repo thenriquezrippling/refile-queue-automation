@@ -122,6 +122,15 @@ def latest_per_unit_with_source_quarter(tickets, source_quarter, source_year):
     log.debug("Found %d tickets with %s for parent batch", len(eligible), marker)
     return latest_per_unit(eligible)
 
+def unit_has_quarter_period(children, filing_unit, target_q, target_year):
+    """True if this filing unit already has a Quarterly child for the target period."""
+    year_str = str(target_year)
+    return any(
+        t["fields"].get(FIELD_FILING_UNIT) == filing_unit
+        and summary_contains_quarter_period(t["fields"].get("summary", ""), target_q, year_str)
+        for t in children
+    )
+
 def semi_monthly_epic_keys_by_state(jira):
     """Map normalized state code -> semi-monthly Parent Epic key."""
     out = {}
@@ -261,7 +270,7 @@ def create_quarterly_tickets(jira, today, *, dry_run=False, exclude_states=None,
             old_summary = tf.get("summary", "")
             if is_excluded_state(tf, exclude_states):
                 continue
-            if skip_existing and period_already_exists(jira, parent_key, "Quarterly", quarter_name):
+            if skip_existing and unit_has_quarter_period(children, unit, target_q, target_year):
                 continue
             new_summary = replace_quarter_in_summary(old_summary, quarter_name)
             if new_summary == old_summary or not summary_contains_quarter_period(new_summary, target_q, str(target_year)):
