@@ -355,7 +355,12 @@ def main():
     migrated = []
     run_semim = args.only in ("semi-monthly", "all")
     if run_semim and not args.no_migrate_semi_monthly:
-        migrated = migrate_semi_monthly_to_epics(jira, **opts)
+        migrated = migrate_semi_monthly_to_epics(
+            jira,
+            dry_run=opts["dry_run"],
+            exclude_states=opts["exclude_states"],
+            errors=opts["errors"],
+        )
     monthly = create_monthly_tickets(jira, today, **opts) if args.only in ("monthly", "all") else []
     quarterly = create_quarterly_tickets(jira, today, **opts) if args.only in ("quarterly", "all") else []
     semi = create_semi_monthly_tickets(jira, today, **opts) if run_semim else []
