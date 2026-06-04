@@ -1,3 +1,3 @@
-# Re-File Queue Automation
+# refile-queue-automation
 
-Automatically processes DNF tickets in Jira filter `47966`.
+TaxOps automations. See `docs/cursor-automation-filing-tickets.md`.
