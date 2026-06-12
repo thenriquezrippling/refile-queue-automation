@@ -18,6 +18,8 @@ Each workflow run writes:
 2. **Logs** — `CURSOR_AUTOMATION_PAYLOAD={...}`
 3. **Artifact** — `filing-automation-result.json`
 
+Payload includes `tickets_by_frequency` with Jira links grouped as `monthly`, `quarterly`, and `semi_monthly` (each entry: `key`, `summary`, `url`). The Cursor prompt posts up to 10 links per frequency in Slack.
+
 ## Before July 1 — required steps
 
 1. **Merge** branch `cursor/fix-july-cursor-automation-ae92` (Python + docs).
