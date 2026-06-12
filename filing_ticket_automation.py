@@ -315,6 +315,16 @@ def create_semi_monthly_tickets(jira, today, *, dry_run=False, exclude_states=No
                 errors and errors.append({"type": "semi-monthly", "parent": parent_key, "error": str(e)})
     return created
 
+def ticket_payload_entry(t):
+    key = t.get("key")
+    entry = {"key": key, "summary": t.get("summary", "")}
+    if key and key != "DRY-RUN":
+        entry["url"] = f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}"
+    return entry
+
+def tickets_for_frequency(ticket_list):
+    return [ticket_payload_entry(t) for t in ticket_list]
+
 def build_run_payload(monthly, quarterly, semi_monthly, migrated, today, errors, *, dry_run=False):
     prior = advance_month(today, -1)
     prior_str = f"{MONTHS[prior.month - 1]} {prior.year}"
@@ -322,11 +332,12 @@ def build_run_payload(monthly, quarterly, semi_monthly, migrated, today, errors,
     run_url = os.environ.get("GITHUB_SERVER_URL") and os.environ.get("GITHUB_REPOSITORY") and os.environ.get("GITHUB_RUN_ID")
     if run_url:
         run_url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-    tickets = []
-    for t in monthly + quarterly + semi_monthly:
-        key = t.get("key")
-        if key and key != "DRY-RUN":
-            tickets.append({"key": key, "summary": t.get("summary", ""), "url": f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}"})
+    tickets_by_frequency = {
+        "monthly": tickets_for_frequency(monthly),
+        "quarterly": tickets_for_frequency(quarterly),
+        "semi_monthly": tickets_for_frequency(semi_monthly),
+    }
+    tickets = [e for group in tickets_by_frequency.values() for e in group if e.get("url")]
     return {
         "status": "failed" if errors else "success",
         "as_of": today.isoformat(),
@@ -344,6 +355,7 @@ def build_run_payload(monthly, quarterly, semi_monthly, migrated, today, errors,
             "monthly_target": prior_str,
             "semi_monthly_target": f"{month_name} {today.year}",
         },
+        "tickets_by_frequency": tickets_by_frequency,
         "tickets": tickets[:25],
         "errors": errors[:20],
     }
@@ -362,13 +374,22 @@ def write_run_summary(monthly, quarterly, semi_monthly, migrated, today, errors,
             lines.append(f"- {t['key']}: {t.get('from')} → {t.get('to')} ({t.get('summary', '')[:60]})")
     if monthly:
         lines.append(f"\n### Monthly ({prior_str}): {len(monthly)}")
-        for t in monthly[:20]: lines.append(f"- {t['key']}: {t['summary']}")
+        for t in monthly[:20]:
+            key = t["key"]
+            url = f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}" if key and key != "DRY-RUN" else None
+            lines.append(f"- [{key}]({url}): {t['summary']}" if url else f"- {key}: {t['summary']}")
     if quarterly:
         lines.append(f"\n### Quarterly: {len(quarterly)}")
-        for t in quarterly[:20]: lines.append(f"- {t['key']}: {t['summary']}")
+        for t in quarterly[:20]:
+            key = t["key"]
+            url = f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}" if key and key != "DRY-RUN" else None
+            lines.append(f"- [{key}]({url}): {t['summary']}" if url else f"- {key}: {t['summary']}")
     if semi_monthly:
         lines.append(f"\n### Semi-Monthly created: {len(semi_monthly)}")
-        for t in semi_monthly: lines.append(f"- {t['key']}: {t['summary']}")
+        for t in semi_monthly:
+            key = t["key"]
+            url = f"{JIRA_BASE_URL.rstrip('/')}/browse/{key}" if key and key != "DRY-RUN" else None
+            lines.append(f"- [{key}]({url}): {t['summary']}" if url else f"- {key}: {t['summary']}")
     lines.append(f"\n**Total created:** {payload['counts']['total_created']}")
     if errors:
         lines.append("\n### Errors")

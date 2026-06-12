@@ -7,7 +7,7 @@ Slack channel: C02UVQ7DFLZ
 How to read results (in order):
 1. Open the workflow job summary and find the JSON block under "Cursor notification payload".
 2. If missing, search workflow logs for a line starting with: CURSOR_AUTOMATION_PAYLOAD=
-3. Parse that JSON. Fields: status, as_of, dry_run, counts, periods, tickets[], errors[], github_run_url.
+3. Parse that JSON. Fields: status, as_of, dry_run, counts, periods, tickets_by_frequency, tickets[], errors[], github_run_url.
 
 Success vs failure:
 - status == "success" AND workflow conclusion is success → success message (even if quarterly count is 0 — normal on non-quarter months like July).
@@ -16,7 +16,12 @@ Success vs failure:
 IF SUCCESS (live run, dry_run false):
 - Title line: Filing tickets created for {as_of}
 - Counts: monthly (periods.monthly_target), quarterly, semi_monthly (periods.semi_monthly_target), migrated, total_created
-- Up to 10 bullet links from tickets[].url (or https://rippling.atlassian.net/browse/{key})
+- For each frequency with count > 0, add a section with a heading and up to 10 Jira links from tickets_by_frequency:
+  - Monthly ({periods.monthly_target}): tickets_by_frequency.monthly
+  - Quarterly: tickets_by_frequency.quarterly
+  - Semi-monthly ({periods.semi_monthly_target}): tickets_by_frequency.semi_monthly
+- Format each ticket as a bullet: <url|KEY> — summary (use tickets[].url or https://rippling.atlassian.net/browse/{key})
+- If a frequency has more than 10 tickets, show the first 10 and note how many more (e.g. "+16 more")
 - GitHub run link if github_run_url present
 - Tag filing team ONLY: <!subteam^S0A8N00FPEU|@filing_team>
 - Do NOT mention <@U026LRKHS1F>
@@ -24,6 +29,7 @@ IF SUCCESS (live run, dry_run false):
 IF SUCCESS (dry_run true):
 - Say DRY RUN — no tickets created
 - Same counts from payload
+- List up to 10 summaries per frequency from tickets_by_frequency (no Jira links — keys are DRY-RUN)
 - Tag <!subteam^S0A8N00FPEU|@filing_team> only
 
 IF FAILED:
