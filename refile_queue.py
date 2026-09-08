@@ -236,6 +236,10 @@ def process_dnf_tickets(jira):
                     v = _copy_value(ff.get(fid))
                     if v is not None:
                         new_fields[fid] = v
+
+                if "customfield_29100" not in new_fields:
+                     new_fields["customfield_29100"] = {"id": "43008"}
+              
                 new_fields[FIELD_DATE_ADDED] = date.today().isoformat()
                 new_fields = {k: v for k, v in new_fields.items() if v is not None}
                 refile_key = jira.create_issue(new_fields)["key"]
